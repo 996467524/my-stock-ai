@@ -2,22 +2,22 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from google import genai
+from openai import OpenAI  # 使用 OpenAI 兼容库调用 DeepSeek
 
-# --- 1. 安全配置 (由 Streamlit Secrets 提供) ---
-if "GEMINI_API_KEY" in st.secrets:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
+# --- 1. 配置 DeepSeek API ---
+if "DEEPSEEK_API_KEY" in st.secrets:
+    api_key = st.secrets["DEEPSEEK_API_KEY"]
 else:
-    st.error("❌ 未在 Secrets 中配置 GEMINI_API_KEY，请在 Streamlit 后台检查配置。")
+    st.error("❌ 未在 Secrets 中配置 DEEPSEEK_API_KEY")
     st.stop()
 
-# 初始化客户端：强制指定 v1beta 路径，这是 2025 年新 Key 最兼容的路径
-client = genai.Client(
-    api_key=API_KEY,
-    http_options={'api_version': 'v1beta'}
+# 初始化 DeepSeek 客户端
+client = OpenAI(
+    api_key=api_key,
+    base_url="https://api.deepseek.com"
 )
 
-st.set_page_config(page_title="AI 股票智能投顾", layout="wide")
+st.set_page_config(page_title="AI 股票智能投顾 (DeepSeek版)", layout="wide")
 
 # --- 2. 核心指标计算 ---
 def calculate_rsi(series, period=14):
@@ -28,24 +28,20 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # --- 3. 仿 App 界面设计 ---
-st.title("📈 AI 股票智能诊断 (云端正式版)")
-ticker_input = st.sidebar.text_input("股票代码 (如 NVDA, AAPL, TSLA)", "NVDA")
+st.title("📈 股票智能诊断 (DeepSeek 驱动)")
+ticker_input = st.sidebar.text_input("股票代码 (如 NVDA, AAPL)", "NVDA")
 
 try:
-    # 抓取数据 (云端直连)
     df = yf.Ticker(ticker_input).history(period="6mo")
-
     if not df.empty:
         df['RSI'] = calculate_rsi(df['Close'])
         current_price = df['Close'].iloc[-1]
         current_rsi = df['RSI'].iloc[-1]
 
-        # 布局
         col1, col2 = st.columns(2)
         col1.metric("当前价格", f"${current_price:.2f}")
         col2.metric("RSI (14) 指标", f"{current_rsi:.2f}")
 
-        # K 线展示 (修复 width 弃用警告)
         fig = go.Figure(data=[go.Candlestick(
             x=df.index, open=df['Open'], high=df['High'],
             low=df['Low'], close=df['Close']
@@ -53,26 +49,24 @@ try:
         fig.update_layout(height=400, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, width='stretch')
 
-        # --- 4. AI 诊断按钮 ---
-        if st.button("🚀 获取 AI 深度诊断", width='stretch'):
-            with st.spinner("AI 正在根据实时数据生成建议..."):
+        # --- 4. DeepSeek 诊断按钮 ---
+        if st.button("🚀 获取 DeepSeek 深度诊断", width='stretch'):
+            with st.spinner("DeepSeek 正在深度分析中..."):
                 try:
-                    prompt = f"分析股票 {ticker_input}: 现价 {current_price:.2f}, RSI 指标 {current_rsi:.2f}。请以中文给出专业的投资建议。"
-
-                    # 【关键修复】：使用 models/ 前缀补全模型路径
-                    response = client.models.generate_content(
-                        model="models/gemini-1.5-flash",
-                        contents=prompt
+                    # 调用 DeepSeek-V3 模型 (标识符为 deepseek-chat)
+                    response = client.chat.completions.create(
+                        model="deepseek-chat",
+                        messages=[
+                            {"role": "system", "content": "你是一位专业的股票分析师，请根据提供的数据给出中文投资建议。"},
+                            {"role": "user", "content": f"股票:{ticker_input}, 现价:{current_price:.2f}, RSI:{current_rsi:.2f}。"}
+                        ],
+                        stream=False
                     )
-
-                    st.success("✅ AI 诊断完成：")
-                    st.markdown(response.text)
-
+                    st.success("✅ 诊断完成：")
+                    st.markdown(response.choices[0].message.content)
                 except Exception as e:
-                    # 如果仍然报错，将显示具体的错误代码，方便最终调试
-                    st.error(f"诊断失败。错误详情: {e}")
-                    st.info("💡 请确保已在 Secrets 中填入最新的 API Key (TOML 格式)。")
+                    st.error(f"诊断失败: {e}")
     else:
-        st.warning("未找到该股票数据，请确认代码是否输入正确。")
+        st.warning("未找到股票数据。")
 except Exception as e:
-    st.error(f"系统运行出错: {e}")
+    st.error(f"系统错误: {e}")
