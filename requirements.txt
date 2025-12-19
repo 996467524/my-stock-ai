@@ -1,0 +1,5 @@
+google-genai
+yfinance
+plotly
+pandas
+streamlit
