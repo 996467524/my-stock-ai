@@ -15,15 +15,14 @@ else:
 client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 # 页面配置
-st.set_page_config(page_title="智投助手 - 专业股票分析", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="智投助手 - 实时行情诊断", layout="wide")
 
-# --- 2. 界面样式优化 (CSS) ---
+# --- 2. 界面样式优化 (修正了之前的参数拼写错误) ---
 st.markdown("""
     <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e6e9ef; }
     </style>
-    """, unsafe_allow_view_html=True)
+    """, unsafe_allow_html=True) # 这里修正了拼写错误
 
 # --- 3. 辅助函数 ---
 def calculate_rsi(series, period=14):
@@ -33,94 +32,79 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 4. 侧边栏配置 ---
-st.sidebar.header("🔍 股票筛选")
-ticker_input = st.sidebar.text_input("输入股票代码", value="NVDA", help="美股直接输入代码(如AAPL)，港股输入代码+相关后缀(如0700.HK)").upper()
-period_choice = st.sidebar.selectbox("查看周期", ["1d", "5d", "1mo", "6mo", "1y"], index=3)
+# --- 4. 侧边栏 ---
+ticker_input = st.sidebar.text_input("股票代码", value="NVDA").upper()
 
-# --- 5. 获取实时与历史数据 ---
+# --- 5. 数据抓取与实时展示 ---
 try:
-    stock_obj = yf.Ticker(ticker_input)
-    # 获取最近两天的历史数据以计算涨跌
-    hist = stock_obj.history(period="2d")
-    # 获取实时完整行情
-    info = stock_obj.fast_info
+    stock = yf.Ticker(ticker_input)
+    # 抓取最近的历史数据 (包含当日最近的 tick)
+    hist = stock.history(period="5d", interval="1d")
 
     if not hist.empty:
-        # 基础指标计算
-        current_price = info.last_price
-        prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else hist['Open'].iloc[0]
-        change = current_price - prev_close
-        pct_change = (change / prev_close) * 100
+        # 获取最新的一行数据作为“当日实时”
+        latest_day = hist.iloc[-1]
+        prev_day = hist.iloc[-2] if len(hist) > 1 else latest_day
 
-        # 今日详细数据 (OHLC)
-        open_p = info.open if info.open else hist['Open'].iloc[-1]
-        high_p = info.day_high if info.day_high else hist['High'].iloc[-1]
-        low_p = info.day_low if info.day_low else hist['Low'].iloc[-1]
-        volume = info.last_volume
+        cur_p = latest_day['Close']
+        open_p = latest_day['Open']
+        high_p = latest_day['High']
+        low_p = latest_day['Low']
 
-        # --- 主页面布局 ---
-        st.title(f"📊 {ticker_input} 实时行情看板")
-        st.caption(f"数据更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (服务器时间)")
+        # 计算涨跌 (对比前一日收盘)
+        change = cur_p - prev_day['Close']
+        pct_change = (change / prev_day['Close']) * 100
 
-        # 第一排：核心数据卡片
-        col1, col2, col3, col4 = st.columns(4)
+        # 页面标题
+        st.title(f"📊 {ticker_input} 实时看板")
 
-        # 涨跌颜色判断 (国内习惯：红涨绿跌)
-        price_color = "inverse" if change < 0 else "normal"
+        # 第一排：实时行情 OHLC
+        # 国内习惯红涨绿跌，但 Streamlit 的 delta 颜色 normal=绿涨, inverse=红涨
+        # 为了符合国内习惯，我们手动根据涨跌设置 delta_color
+        d_color = "normal" if change >= 0 else "inverse"
 
-        col1.metric("最新价", f"${current_price:.2f}", f"{change:+.2f} ({pct_change:+.2f}%)", delta_color=price_color)
-        col2.metric("今日开盘", f"${open_p:.2f}")
-        col3.metric("今日最高", f"${high_p:.2f}")
-        col4.metric("今日最低", f"${low_p:.2f}")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("最新价", f"${cur_p:.2f}", f"{change:+.2f} ({pct_change:+.2f}%)", delta_color=d_color)
+        c2.metric("今日开盘", f"${open_p:.2f}")
+        c3.metric("今日最高", f"${high_p:.2f}")
+        c4.metric("今日最低", f"${low_p:.2f}")
+        c5.metric("成交量", f"{latest_day['Volume']:,.0f}")
 
-        # 第二排：详细技术数据
-        df_long = stock_obj.history(period="6mo")
-        rsi_val = calculate_rsi(df_long['Close']).iloc[-1]
+        st.divider()
 
-        st.markdown("---")
-        t_col1, t_col2, t_col3 = st.columns(3)
-        t_col1.write(f"📈 **成交量:** {volume:,.0f}")
-        t_col2.write(f"指标 **RSI (14):** {rsi_val:.2f}")
-        t_col3.write(f"📅 **统计周期:** 最近6个月")
+        # 第二排：图表与技术指标
+        full_hist = stock.history(period="6mo")
+        rsi_val = calculate_rsi(full_hist['Close']).iloc[-1]
 
-        # K线图
+        # K线图 (修正警告：使用 width='stretch')
         fig = go.Figure(data=[go.Candlestick(
-            x=df_long.index, open=df_long['Open'], high=df_long['High'],
-            low=df_long['Low'], close=df_long['Close'],
+            x=full_hist.index, open=full_hist['Open'], high=full_hist['High'],
+            low=full_hist['Low'], close=full_hist['Close'],
             increasing_line_color='#ef5350', decreasing_line_color='#26a69a' # 红涨绿跌
         )])
-        fig.update_layout(title=f"{ticker_input} 历史趋势图", xaxis_rangeslider_visible=False, height=500)
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(t=0, b=0, l=0, r=0))
+        st.plotly_chart(fig, width='stretch')
 
-        # --- 6. DeepSeek AI 诊断 ---
-        st.markdown("### 🤖 DeepSeek AI 智能诊断")
-        if st.button("开始深度分析报告", type="primary", use_container_width=True):
-            with st.spinner("正在召集 AI 专家进行多维度评估..."):
+        # --- 6. AI 诊断 ---
+        st.subheader("🤖 DeepSeek 智能分析报告")
+        if st.button("生成深度诊断报告", type="primary"):
+            with st.spinner("AI 正在扫描盘面..."):
                 try:
-                    analysis_prompt = f"""
-                    你是一个资深中国证券分析师。请对以下股票进行深度诊断：
-                    股票代码：{ticker_input}
-                    当前实时价：{current_price:.2f} (今日开盘:{open_p:.2f}, 最高:{high_p:.2f}, 最低:{low_p:.2f})
-                    RSI指标：{rsi_val:.2f}
-                    
-                    请从技术面、动能、以及风险提示三个维度，用简洁且专业的中文给出结论。
+                    prompt = f"""
+                    股票：{ticker_input}
+                    最新价：{cur_p:.2f} (今日最高:{high_p:.2f}, 最低:{low_p:.2f})
+                    RSI(14)：{rsi_val:.2f}
+                    请根据以上数据提供简洁的中文投资建议，包括压力位、支撑位分析。
                     """
-
                     response = client.chat.completions.create(
                         model="deepseek-chat",
-                        messages=[
-                            {"role": "system", "content": "你是一位专注于全球市场的中文投顾专家，语气稳重专业。"},
-                            {"role": "user", "content": analysis_prompt}
-                        ]
+                        messages=[{"role": "user", "content": prompt}]
                     )
-                    st.success("诊断完成")
+                    st.success("分析完成")
                     st.info(response.choices[0].message.content)
                 except Exception as e:
-                    st.error(f"AI 诊断暂时无法完成: {e}")
-
+                    st.error(f"AI 服务异常: {e}")
     else:
-        st.warning("⚠️ 无法获取该代码的数据，请检查代码是否正确（例如：美股 NVDA，港股 0700.HK）。")
-
+        st.warning("查无此股，请检查代码。")
 except Exception as e:
-    st.error(f"⚠️ 系统数据调度错误: {e}")
+    st.error(f"数据加载错误: {e}")
